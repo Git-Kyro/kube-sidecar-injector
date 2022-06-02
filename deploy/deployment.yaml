@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-sidecar-injector-sa
+  namespace: debug
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kube-sidecar-injector-clusterrole
+  namespace: debug
+rules:
+  - verbs: ["*"]
+    resources: ["mutatingwebhookconfigurations"]
+    apiGroups: ["admissionregistration.k8s.io"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kube-sidecar-injector-clusterrolebinding
+  namespace: debug
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kube-sidecar-injector-clusterrole
+subjects:
+  - kind: ServiceAccount
+    name: kube-sidecar-injector-sa
+    namespace: debug
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sidecar-injector-webhook-deployment
+  namespace: debug
+  labels:
+    app: sidecar-injector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sidecar-injector
+  template:
+    metadata:
+      labels:
+        app: sidecar-injector
+    spec:
+      serviceAccountName: kube-sidecar-injector-sa
+      initContainers:
+          - name: webhook-init
+            image: registry.cn-shenzhen.aliyuncs.com/kyro/kube-sidecar-injector-tls:latest
+            imagePullPolicy: IfNotPresent
+            args:
+              - -sidecarCfgFile=/etc/webhook/config/sidecarconfig.yaml
+            env:
+              - name: WEBHOOK_NAMESPACE
+                value: debug
+              - name: WEBHOOK_SERVICE
+                value: kube-sidecar-injector
+              - name: MUTATE_CONFIG
+                value: kube-sidecar-injector
+              - name: MUTATE_PATH
+                value: /mutate
+            volumeMounts:
+              - name: webhook-certs
+                mountPath: /etc/webhook/certs
+      containers:
+        - name: sidecar-injector
+          image: registry.cn-shenzhen.aliyuncs.com/kyro/kube-sidecar-injector:latest
+          imagePullPolicy: IfNotPresent
+          args:
+          - -sidecarCfgFile=/etc/webhook/config/sidecarconfig.yaml
+          - -tlsCertFile=/etc/webhook/certs/tls.crt
+          - -tlsKeyFile=/etc/webhook/certs/tls.key
+          - -alsologtostderr
+          - -v=4
+          - 2>&1
+          volumeMounts:
+          - name: webhook-certs
+            mountPath: /etc/webhook/certs
+            readOnly: true
+          - name: webhook-config
+            mountPath: /etc/webhook/config
+      volumes:
+      - name: webhook-certs
+        emptyDir: {}
+      - name: webhook-config
+        configMap:
+          name: sidecar-injector-webhook-configmap
